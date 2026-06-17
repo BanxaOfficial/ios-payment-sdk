@@ -100,3 +100,54 @@ public struct CreateOrderRequest: Identifiable, Codable, Equatable, Sendable {
         self.discountCode = discountCode
     }
 }
+
+/// Response from `POST /buy`. Mirrors the Banxa `Order` schema.
+public struct CreateOrderResponse: Identifiable, Codable, Equatable, Sendable {
+    public let id: String
+    public let externalCustomerID: String?
+    public let externalOrderID: String?
+    public let orderType: String?
+    public let fiat: String?
+    public let fiatAmount: String?
+    public let crypto: String?
+    public let cryptoAmount: String?
+    public let walletAddress: String?
+    public let walletAddressTag: String?
+    public let paymentMethodID: Int?
+    public let paymentMethodType: String?
+    public let status: String?
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let checkoutUrl: String?
+    public let nativeToken: String?
+    public let blockchain: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case externalCustomerID = "externalCustomerId"
+        case externalOrderID = "externalOrderId"
+        case orderType
+        case fiat
+        case fiatAmount
+        case crypto
+        case cryptoAmount
+        case walletAddress
+        case walletAddressTag
+        case paymentMethodID = "paymentMethodId"
+        case paymentMethodType
+        case status
+        case createdAt
+        case updatedAt
+        case checkoutUrl
+        case nativeToken
+        case blockchain
+    }
+}
+
+/// Response from `POST /eligibility`. `paymentReady` decides whether
+/// the SDK presents Primer drop-in or hands a checkout URL to the partner.
+public struct EligibilityResponse: Identifiable, Codable, Equatable, Sendable {
+    public let id: String?
+    public let paymentReady: Bool?
+    public let kycRequirements: [String]?
+}

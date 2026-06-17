@@ -10,7 +10,6 @@ import PrimerSDK
 public enum BanxaEnvironment: Sendable {
     case sandbox
     case production
-    case local
     case preprod
     
     /// Base host (scheme + domain) for the selected environment.
@@ -20,7 +19,6 @@ public enum BanxaEnvironment: Sendable {
         case .sandbox:    return "https://api.banxa-sandbox.com"
         case .production: return "https://api.banxa.com"
         case .preprod:    return "https://api.banxa-preprod.com"
-        case .local:      return "http://localhost"
         }
     }
 }
@@ -74,10 +72,111 @@ public struct BanxaConfig {
 /// Callbacks the SDK sends back to the partner for both Banxa flow events
 /// and forwarded Primer drop-in checkout events.
 @MainActor
-public protocol BanxaPaymentSDKDelegate: AnyObject {}
+public protocol BanxaPaymentSDKDelegate: AnyObject {
+    // Banxa flow
+    
+    /// Called when the SDK has a checkout URL to hand back to the partner
+    /// (paymentReady is false, or paymentReady is true but no nativeToken was returned).
+    /// - Parameter response: The full create-order response from Banxa.
+    func banxaDidReceiveCheckout(_ response: CreateOrderResponse)
+    
+    /// Called when the Banxa flow itself fails (validation, network, decoding, or API error).
+    /// - Parameter error: The error describing the failure. Usually an `APIError`.
+    func banxaDidFail(error: Error)
+    
+    /// Called when the user dismisses the Primer drop-in UI without completing checkout.
+    func banxaDidDismiss()
+    
+    // Forwarded Primer callbacks
+    
+    /// Called when Primer drop-in checkout completes successfully.
+    /// - Parameter data: The Primer checkout result payload.
+    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData)
+    
+    /// Called when Primer is about to refresh its client session.
+    func banxaClientSessionWillUpdate()
+    
+    /// Called after Primer's client session has been refreshed.
+    /// - Parameter clientSession: The updated client session.
+    func banxaClientSessionDidUpdate(_ clientSession: PrimerClientSession)
+    
+    /// Called before Primer creates a payment. Use the decision handler to
+    /// continue, abort with a custom error, or supply additional data.
+    /// - Parameters:
+    ///   - data: Payment method data Primer is about to submit.
+    ///   - decisionHandler: Invoke exactly once to tell Primer how to proceed.
+    func banxaWillCreatePayment(
+        _ data: PrimerCheckoutPaymentMethodData,
+        decisionHandler: @escaping (PrimerPaymentCreationDecision) -> Void
+    )
+    
+    /// Called when Primer fails. Use the decision handler to provide a custom
+    /// error message shown to the user.
+    /// - Parameters:
+    ///   - error: The error raised by Primer.
+    ///   - data: Optional checkout data captured before the failure.
+    ///   - decisionHandler: Invoke exactly once with a `PrimerErrorDecision`.
+    func banxaDidFailWithError(
+        _ error: Error,
+        data: PrimerCheckoutData?,
+        decisionHandler: @escaping (PrimerErrorDecision) -> Void
+    )
+    
+    /// Called when Primer has tokenized a payment method.
+    /// - Parameters:
+    ///   - tokenData: Token information returned by Primer.
+    ///   - decisionHandler: Invoke exactly once to resume or fail the flow.
+    func banxaDidTokenizePaymentMethod(
+        _ tokenData: PrimerPaymentMethodTokenData,
+        decisionHandler: @escaping (PrimerResumeDecision) -> Void
+    )
+    
+    /// Called when Primer needs to resume the payment with a server token (e.g. 3DS).
+    /// - Parameters:
+    ///   - resumeToken: Resume token issued by Primer's backend.
+    ///   - decisionHandler: Invoke exactly once to resume or fail the flow.
+    func banxaDidResumeWith(
+        _ resumeToken: String,
+        decisionHandler: @escaping (PrimerResumeDecision) -> Void
+    )
+    
+    /// Called when the payment enters a pending state and Primer has supplemental info.
+    /// - Parameter additionalInfo: Optional extra payload describing the pending state.
+    func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?)
+}
 
 /// Default no-op implementations make every method effectively optional.
-public extension BanxaPaymentSDKDelegate {}
+public extension BanxaPaymentSDKDelegate {
+    func banxaDidReceiveCheckout(_ response: CreateOrderResponse) {}
+    func banxaDidFail(error: Error) {}
+    func banxaDidDismiss() {}
+    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData) {}
+    func banxaClientSessionWillUpdate() {}
+    func banxaClientSessionDidUpdate(_ clientSession: PrimerClientSession) {}
+    func banxaWillCreatePayment(
+        _ data: PrimerCheckoutPaymentMethodData,
+        decisionHandler: @escaping (PrimerPaymentCreationDecision) -> Void
+    ) {
+        decisionHandler(.continuePaymentCreation())
+    }
+    func banxaDidFailWithError(
+        _ error: Error,
+        data: PrimerCheckoutData?,
+        decisionHandler: @escaping (PrimerErrorDecision) -> Void
+    ) {
+        decisionHandler(.fail(withErrorMessage: nil))
+    }
+    func banxaDidTokenizePaymentMethod(
+        _ tokenData: PrimerPaymentMethodTokenData,
+        decisionHandler: @escaping (PrimerResumeDecision) -> Void
+    ) {}
+    func banxaDidResumeWith(
+        _ resumeToken: String,
+        decisionHandler: @escaping (PrimerResumeDecision) -> Void
+    ) {}
+    func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?) {}
+}
+
 
 // MARK: - SDK
 
