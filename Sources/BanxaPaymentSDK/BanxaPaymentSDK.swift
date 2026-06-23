@@ -177,7 +177,6 @@ public extension BanxaPaymentSDKDelegate {
     func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?) {}
 }
 
-
 // MARK: - SDK
 
 /// Headless Banxa payment SDK. Owns configuration, orchestrates the
@@ -212,11 +211,46 @@ public final class BanxaPaymentSDK {
     /// Primer drop-in UI; otherwise hands the checkout URL back to the
     /// partner via `delegate.banxaDidReceiveCheckout(_:)`.
     /// - Parameter request: The order to be created.
-    public func startPayment(request: CreateOrderRequest) {}
+    public func startPayment(request: CreateOrderRequest) {
+        guard let config else {
+            delegate?.banxaDidFail(error: APIError.sdkNotConfigured)
+            return
+        }
+        
+        let missing = config.missingCredentialFields
+        guard missing.isEmpty else {
+            delegate?.banxaDidFail(error: APIError.missingCredentials(missing))
+            return
+        }
+        
+        Task { [weak self] in
+            await self?.runPaymentFlow(request: request, config: config)
+        }
+    }
     
     /// Sequential async flow used by `startPayment(request:)`.
     /// - Parameters:
     ///   - request: The order to be created.
     ///   - config: Resolved partner configuration.
-    private func runPaymentFlow(request: CreateOrderRequest, config: BanxaConfig) async {}
+    private func runPaymentFlow(request: CreateOrderRequest, config: BanxaConfig) async {
+        do {
+            let eligibility: EligibilityResponse = try await apiClient.request(
+                CheckEligibilityEndpoint(request: request, config: config)
+            )
+            let order: CreateOrderResponse = try await apiClient.request(
+                CreateOrderEndpoint(request: request, config: config)
+            )
+            
+            if let token = order.nativeToken,
+               !token.isEmpty {
+                Primer.shared.showUniversalCheckout(clientToken: token)
+            } else if let checkoutUrl = order.checkoutUrl, !checkoutUrl.isEmpty {
+                //TODO call webview
+            }
+        } catch let error as APIError {
+            delegate?.banxaDidFail(error: error)
+        } catch {
+            delegate?.banxaDidFail(error: APIError.unknown(error.localizedDescription))
+        }
+    }
 }

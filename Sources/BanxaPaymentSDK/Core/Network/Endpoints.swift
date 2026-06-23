@@ -52,3 +52,41 @@ private func encodeBody<T: Encodable>(_ value: T) -> Data? {
     try? JSONEncoder().encode(value)
 }
 
+/// `POST /buy` — creates a fiat-to-crypto order.
+public struct CreateOrderEndpoint: Endpoint {
+    public let baseURL: String
+    public let headers: [String: String]
+    public var path: String { "/buy" }
+    public var method: String { "POST" }
+    public var body: Data?
+    
+    /// Creates the endpoint.
+    /// - Parameters:
+    ///   - request: The order payload to send.
+    ///   - config: Partner config used to derive `baseURL` and `x-api-key` header.
+    init(request: CreateOrderRequest, config: BanxaConfig) {
+        self.baseURL = config.baseURL
+        self.headers = banxaHeaders(apiKey: config.apiKey)
+        self.body = encodeBody(request)
+    }
+}
+
+/// `POST /eligibility` — checks whether the order can be processed in-app
+/// (paymentReady) or needs the hosted Banxa checkout URL.
+public struct CheckEligibilityEndpoint: Endpoint {
+    public let baseURL: String
+    public let headers: [String: String]
+    public var path: String { "/eligibility" }
+    public var method: String { "POST" }
+    public var body: Data?
+    
+    /// Creates the endpoint.
+    /// - Parameters:
+    ///   - request: The order payload to evaluate.
+    ///   - config: Partner config used to derive `baseURL` and `x-api-key` header.
+    init(request: CreateOrderRequest, config: BanxaConfig) {
+        self.baseURL = config.baseURL
+        self.headers = banxaHeaders(apiKey: config.apiKey)
+        self.body = encodeBody(request)
+    }
+}
