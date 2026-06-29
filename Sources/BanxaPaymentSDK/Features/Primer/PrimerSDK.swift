@@ -15,6 +15,7 @@ extension BanxaPaymentSDK: @MainActor PrimerDelegate {
     /// - Parameter data: Primer's checkout result payload.
     public func primerDidCompleteCheckoutWithData(_ data: PrimerCheckoutData) {
         delegate?.banxaDidCompleteCheckout(data)
+        Primer.shared.dismiss()
     }
     
     /// Called by Primer just before its client session is refreshed.
@@ -61,6 +62,7 @@ extension BanxaPaymentSDK: @MainActor PrimerDelegate {
         } else {
             decisionHandler(.fail(withErrorMessage: nil))
         }
+        Primer.shared.dismiss()
     }
     
     /// Called by Primer when the user dismisses the drop-in UI.

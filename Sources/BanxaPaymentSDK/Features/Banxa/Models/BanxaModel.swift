@@ -9,7 +9,7 @@
 /// Request payload for both `/eligibility` and `/buy`.
 public struct CreateOrderRequest: Identifiable, Codable, Equatable, Sendable {
     public var id: String?
-    public var paymentMethodID: String
+    public var paymentMethodID: String?
     public var crypto: String
     public var blockchain: String?
     public var fiat: String
@@ -63,7 +63,6 @@ public struct CreateOrderRequest: Identifiable, Codable, Equatable, Sendable {
     ///   - externalOrderID: Optional partner-side order id.
     ///   - discountCode: Optional promo / discount code.
     public init(
-        paymentMethodID: String,
         crypto: String,
         fiat: String,
         fiatAmount: String,
@@ -71,6 +70,7 @@ public struct CreateOrderRequest: Identifiable, Codable, Equatable, Sendable {
         email: String,
         redirectURL: String,
         
+        paymentMethodID: String? = nil,
         id: String? = nil,
         blockchain: String? = nil,
         cryptoAmount: String? = nil,

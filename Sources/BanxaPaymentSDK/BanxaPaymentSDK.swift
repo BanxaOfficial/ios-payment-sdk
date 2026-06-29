@@ -3,6 +3,7 @@
 
 import Foundation
 import PrimerSDK
+import UIKit
 
 // MARK: - Environment
 
@@ -80,6 +81,17 @@ public protocol BanxaPaymentSDKDelegate: AnyObject {
     /// - Parameter response: The full create-order response from Banxa.
     func banxaDidReceiveCheckout(_ response: CreateOrderResponse)
     
+    /// Called when the SDK has a checkout URL and need to execute the internal WebView.
+    /// - Parameter status: the status and if any other query.
+    func banxaDidWebViewCheckout(_ status: Bool, _ query: String?)
+    
+    /// Called for every URL navigation inside the internal checkout WebView,
+    /// including intermediate steps (payment method picker, 3DS, status pages…).
+    /// Use this to observe the full URL trail; the SDK still emits
+    /// `banxaDidWebViewCheckout(_:_:)` separately for the final success/failure.
+    /// - Parameter url: The URL the WebView is about to navigate to.
+    func banxaWebViewDidNavigate(to url: URL)
+    
     /// Called when the Banxa flow itself fails (validation, network, decoding, or API error).
     /// - Parameter error: The error describing the failure. Usually an `APIError`.
     func banxaDidFail(error: Error)
@@ -148,6 +160,8 @@ public protocol BanxaPaymentSDKDelegate: AnyObject {
 /// Default no-op implementations make every method effectively optional.
 public extension BanxaPaymentSDKDelegate {
     func banxaDidReceiveCheckout(_ response: CreateOrderResponse) {}
+    func banxaDidWebViewCheckout(_ status: Bool, _ query: String?) {}
+    func banxaWebViewDidNavigate(to url: URL) {}
     func banxaDidFail(error: Error) {}
     func banxaDidDismiss() {}
     func banxaDidCompleteCheckout(_ data: PrimerCheckoutData) {}
@@ -211,7 +225,7 @@ public final class BanxaPaymentSDK {
     /// Primer drop-in UI; otherwise hands the checkout URL back to the
     /// partner via `delegate.banxaDidReceiveCheckout(_:)`.
     /// - Parameter request: The order to be created.
-    public func startPayment(request: CreateOrderRequest) {
+    public func startPayment(request: CreateOrderRequest, controller: UIViewController) {
         guard let config else {
             delegate?.banxaDidFail(error: APIError.sdkNotConfigured)
             return
@@ -224,7 +238,7 @@ public final class BanxaPaymentSDK {
         }
         
         Task { [weak self] in
-            await self?.runPaymentFlow(request: request, config: config)
+            await self?.runPaymentFlow(request: request, config: config, controller: controller)
         }
     }
     
@@ -232,7 +246,7 @@ public final class BanxaPaymentSDK {
     /// - Parameters:
     ///   - request: The order to be created.
     ///   - config: Resolved partner configuration.
-    private func runPaymentFlow(request: CreateOrderRequest, config: BanxaConfig) async {
+    private func runPaymentFlow(request: CreateOrderRequest, config: BanxaConfig, controller: UIViewController) async {
         do {
             let eligibility: EligibilityResponse = try await apiClient.request(
                 CheckEligibilityEndpoint(request: request, config: config)
@@ -242,15 +256,66 @@ public final class BanxaPaymentSDK {
             )
             
             if let token = order.nativeToken,
-               !token.isEmpty {
-                Primer.shared.showUniversalCheckout(clientToken: token)
-            } else if let checkoutUrl = order.checkoutUrl, !checkoutUrl.isEmpty {
-                //TODO call webview
+               !token.isEmpty,
+               let banxaMethodID = request.paymentMethodID,
+               !banxaMethodID.isEmpty {
+                let primerType = mapToPrimerPaymentMethodType(banxaMethodID)
+                print("[Banxa] showPaymentMethod -> banxaID:", banxaMethodID,
+                      "primerType:", primerType,
+                      "tokenLen:", token.count)
+                Primer.shared.showPaymentMethod(
+                    primerType,
+                    intent: .checkout,
+                    clientToken: token
+                )
+                
+            } else if let url = order.checkoutUrl, !url.isEmpty {
+                let vc = CheckoutWebViewController(
+                    checkoutUrl: url, returnUrl: request.redirectURL,
+                    onClose: {
+                        self.delegate?.banxaDidDismiss()
+                    }, onNavigationStateChange: { [weak self] url in
+                        self?.delegate?.banxaWebViewDidNavigate(to: url)
+                    },
+                    onSuccess: { status in
+                        self.delegate?.banxaDidWebViewCheckout(true, status)
+                    },
+                    onFailure: { status in
+                        self.delegate?.banxaDidWebViewCheckout(false, status)
+                    },
+                    returnUrlOnSuccess: "/status/",
+                    returnUrlOnFailure: "/error/",
+                    returnUrlOnCancelled: "/cancel/"
+                )
+                let navController = UINavigationController(rootViewController: vc)
+                navController.modalPresentationStyle = .fullScreen
+                controller.present(navController, animated: true)
             }
         } catch let error as APIError {
             delegate?.banxaDidFail(error: error)
         } catch {
             delegate?.banxaDidFail(error: APIError.unknown(error.localizedDescription))
+        }
+    }
+    
+    /// Maps a Banxa payment-method identifier (e.g. `"debit-credit-card"`,
+    /// `"apple-pay"`) to the matching Primer payment-method-type constant
+    /// (e.g. `"PAYMENT_CARD"`, `"APPLE_PAY"`). Unknown identifiers are
+    /// returned unchanged so callers can pass through already-Primer values.
+    private func mapToPrimerPaymentMethodType(_ banxaPaymentMethodID: String) -> String {
+        switch banxaPaymentMethodID.lowercased() {
+        case "debit-credit-card", "credit-card", "card", "primercc":
+            return "PAYMENT_CARD"
+        case "apple-pay":
+            return "APPLE_PAY"
+        case "google-pay":
+            return "GOOGLE_PAY"
+        case "paypal":
+            return "PAYPAL"
+        case "klarna":
+            return "KLARNA"
+        default:
+            return banxaPaymentMethodID
         }
     }
 }
