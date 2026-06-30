@@ -260,9 +260,6 @@ public final class BanxaPaymentSDK {
                let banxaMethodID = request.paymentMethodID,
                !banxaMethodID.isEmpty {
                 let primerType = mapToPrimerPaymentMethodType(banxaMethodID)
-                print("[Banxa] showPaymentMethod -> banxaID:", banxaMethodID,
-                      "primerType:", primerType,
-                      "tokenLen:", token.count)
                 Primer.shared.showPaymentMethod(
                     primerType,
                     intent: .checkout,

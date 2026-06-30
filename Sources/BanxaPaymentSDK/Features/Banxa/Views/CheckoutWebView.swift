@@ -49,6 +49,12 @@ public final class CheckoutWebViewController: UIViewController {
         return indicator
     }()
 
+    private var urlObservation: NSKeyValueObservation?
+
+    /// Guards against double-firing of success/failure/cancelled callbacks
+    /// when the same URL is seen via both `decidePolicyFor` and KVO.
+    private var didFireTerminalCallback = false
+
     // MARK: - Init
 
     public init(
@@ -92,7 +98,6 @@ public final class CheckoutWebViewController: UIViewController {
     // MARK: - Setup
 
     private func setupNavigationBar() {
-//        title = "Checkout"
         view.backgroundColor = .systemBackground
         let closeButton = UIButton()
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
@@ -116,6 +121,16 @@ public final class CheckoutWebViewController: UIViewController {
             loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
         ])
+
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, change in
+            guard let self, let url = change.newValue ?? nil else { return }
+            self.onNavigationStateChange?(url)
+            self.checkUrl(url.absoluteString)
+        }
+    }
+
+    deinit {
+        urlObservation?.invalidate()
     }
 
     private func loadCheckoutUrl() {
@@ -132,20 +147,26 @@ public final class CheckoutWebViewController: UIViewController {
     // MARK: - URL checking
 
     /// Checks the URL against each return-URL pattern.
-    /// Returns true and auto-dismisses when a pattern matches.
+    /// Returns true and auto-dismisses when a pattern matches. Idempotent —
+    /// safe to call from both `decidePolicyFor` and the `webView.url` KVO.
     @discardableResult
     private func checkUrl(_ urlString: String) -> Bool {
+        guard !didFireTerminalCallback else { return true }
+
         if let pattern = returnUrlOnSuccess, urlString.contains(pattern) {
+            didFireTerminalCallback = true
             onSuccess?(urlString)
             dismissAndClose()
             return true
         }
         if let pattern = returnUrlOnFailure, urlString.contains(pattern) {
+            didFireTerminalCallback = true
             onFailure?(urlString)
             dismissAndClose()
             return true
         }
         if let pattern = returnUrlOnCancelled, urlString.contains(pattern) {
+            didFireTerminalCallback = true
             onCancelled?(urlString)
             dismissAndClose()
             return true
@@ -161,35 +182,12 @@ public final class CheckoutWebViewController: UIViewController {
 }
 
 // MARK: - WKNavigationDelegate
+// The delegate is kept only to drive the loading indicator.
 
 extension CheckoutWebViewController: WKNavigationDelegate {
 
-    public func webView(
-        _ webView: WKWebView,
-        decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-    ) {
-        guard let url = navigationAction.request.url else {
-          
-            decisionHandler(.allow)
-            return
-        }
-
-        if checkUrl(url.absoluteString) {
-            decisionHandler(.cancel)
-            return
-        }
-
-        onNavigationStateChange?(url)
-        decisionHandler(.allow)
-    }
-
     public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loadingIndicator.startAnimating()
-        if let url = webView.url?.absoluteString, url.contains(self.returnUrl) {
-            loadingIndicator.stopAnimating()
-            self.onSuccess?(url)
-        }
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
