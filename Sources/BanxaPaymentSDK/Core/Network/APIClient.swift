@@ -76,9 +76,25 @@ public final class APIClient: APIClientProtocol, @unchecked Sendable {
         }
         
         switch http.statusCode {
-        case 200...299: break
-        case 401: throw APIError.unauthorized
-        default: throw APIError.serverError(http.statusCode)
+        case 200...299:
+            break
+        case 401:
+            throw APIError.unauthorized
+        case 422:
+            // Banxa returns structured validation errors on these status codes.
+            // Try to surface them as `.validation`; fall through to `.serverError`
+            // if the body doesn't match the expected shape.
+            if let parsed = try? decoder.decode(BanxaErrorResponse.self, from: data),
+               parsed.errors != nil || parsed.message != nil {
+                throw APIError.validation(
+                    statusCode: http.statusCode,
+                    message: parsed.message,
+                    fieldErrors: parsed.errors ?? [:]
+                )
+            }
+            throw APIError.serverError(http.statusCode)
+        default:
+            throw APIError.serverError(http.statusCode)
         }
         
         do {

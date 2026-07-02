@@ -11,6 +11,11 @@ import Foundation
 public enum APIError: LocalizedError {
     case invalidURL
     case serverError(Int)
+    /// Validation error returned by the Banxa API (typically HTTP 400 / 422).
+    /// `statusCode` is the HTTP status. `message` is the top-level `message`
+    /// from the response body. `fieldErrors` is the per-field breakdown
+    /// under `errors` (e.g. `["paymentMethodId": ["…"]]`).
+    case validation(statusCode: Int, message: String?, fieldErrors: [String: [String]])
     case unauthorized
     case decodingFailed(String)
     case networkUnavailable
@@ -25,6 +30,18 @@ public enum APIError: LocalizedError {
             return "Invalid URL"
         case .serverError(let code):
             return "Server error: \(code)"
+        case .validation(let statusCode, let message, let fieldErrors):
+            let flat = fieldErrors
+                .sorted(by: { $0.key < $1.key })
+                .map { "\($0.key): \($0.value.joined(separator: " "))" }
+                .joined(separator: "; ")
+            if !flat.isEmpty, let message {
+                return "\(message) (\(statusCode)) — \(flat)"
+            }
+            if !flat.isEmpty {
+                return "Validation error (\(statusCode)) — \(flat)"
+            }
+            return message ?? "Validation error (\(statusCode))"
         case .unauthorized:
             return "Unauthorized"
         case .decodingFailed(let message):
@@ -39,4 +56,11 @@ public enum APIError: LocalizedError {
             return "Unknown error: \(message)"
         }
     }
+}
+
+/// Wire-level shape of Banxa's validation error responses (HTTP 400/422).
+/// Matches `{ "errors": {"paymentMethodId": ["…"]}, "message": "…" }`.
+struct BanxaErrorResponse: Decodable {
+    let errors: [String: [String]]?
+    let message: String?
 }
