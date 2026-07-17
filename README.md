@@ -55,17 +55,11 @@ Configure the SDK once, ideally at app launch (for example in `AppDelegate` or y
 
 ```swift
 import BanxaPaymentSDK
-import PrimerSDK
-
-let primerSettings = PrimerSettings(
-    paymentHandling: .auto,
-)
 
 let config = BanxaConfig(
     apiKey: "YOUR_BANXA_API_KEY",
     partnerID: "your-partner-slug",
-    environment: .sandbox,           // .sandbox | .preprod | .production
-    primerSettings: primerSettings   // optional
+    environment: .sandbox            // .sandbox | .preprod | .production
 )
 
 BanxaPaymentSDK.shared.configure(config: config)
@@ -84,83 +78,61 @@ The effective API base URL is `<host>/<partnerID>/v2`.
 
 ## Starting a Payment
 
-Build a `CreateOrderRequest` and call `startPayment(request:)`:
+Build a `CreateOrderRequest` and call `startPayment(request:controller:)`. Pass the view controller that should host any WebView fallback presentation.
 
 ```swift
 let request = CreateOrderRequest(
-    paymentMethodID: "debit-credit-card",
     crypto: "ETH",
     fiat: "EUR",
     fiatAmount: "40",
     walletAddress: "0x0000000000000000000000000000000000000000",
     email: "user@example.com",
-    redirectURL: "your-app-scheme://banxa-return"
+    redirectURL: "your-app-scheme://banxa-return",
+    paymentMethodID: "debit-credit-card"
 )
 
-BanxaPaymentSDK.shared.startPayment(request: request)
+BanxaPaymentSDK.shared.startPayment(request: request, controller: self)
 ```
 
 ## Handling Callbacks
 
-Conform to `BanxaPaymentSDKDelegate` to receive both Banxa flow events and forwarded Primer drop-in callbacks. All methods have default no-op implementations — implement only what you need.
+Conform to `BanxaPaymentSDKDelegate` to receive Banxa flow events and in-app checkout results. All callback types are Banxa-owned — partners never import or reference the underlying payment provider SDK. Every method has a default no-op implementation, so implement only what you need.
+
+The delegate has just three methods — one for success, one for failure, one for dismissal. Each has a default no-op implementation, so implement only what you need.
 
 ```swift
+import BanxaPaymentSDK
+
 extension MyViewController: BanxaPaymentSDKDelegate {
 
-    // MARK: Banxa flow
-
-    func banxaDidReceiveCheckout(_ response: CreateOrderResponse) {
-        // No native token — present `response.checkoutUrl` in a web view.
+    func banxaDidCompleteCheckout(_ result: BanxaCheckoutResult) {
+        // Success — from either the native in-app flow or the internal WebView.
+        // Native path populates paymentId / orderId / status.
+        // WebView path populates rawQuery with the terminal success URL query string.
+        print("Paid:", result.paymentId ?? result.rawQuery ?? "-")
     }
 
     func banxaDidFail(error: Error) {
-        // Validation, network, decoding or API error. Typically an `APIError`.
-        print("Banxa error:", error.localizedDescription)
+        // Any failure: Banxa API / validation / network / decoding errors,
+        // in-app checkout errors (card decline, 3DS), or WebView failure URL.
+        // Banxa-side failures are `APIError`.
+        print("Failed:", error.localizedDescription)
     }
 
     func banxaDidDismiss() {
-        // User closed the Primer drop-in without completing checkout.
+        // User closed the checkout UI without completing.
     }
-
-    // MARK: Forwarded Primer callbacks
-
-    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData) {
-        // Payment completed successfully.
-    }
-
-    func banxaClientSessionWillUpdate() { }
-    func banxaClientSessionDidUpdate(_ clientSession: PrimerClientSession) { }
-
-    func banxaWillCreatePayment(
-        _ data: PrimerCheckoutPaymentMethodData,
-        decisionHandler: @escaping (PrimerPaymentCreationDecision) -> Void
-    ) {
-        decisionHandler(.continuePaymentCreation())
-    }
-
-    func banxaDidFailWithError(
-        _ error: Error,
-        data: PrimerCheckoutData?,
-        decisionHandler: @escaping (PrimerErrorDecision) -> Void
-    ) {
-        decisionHandler(.fail(withErrorMessage: error.localizedDescription))
-    }
-
-    func banxaDidTokenizePaymentMethod(
-        _ tokenData: PrimerPaymentMethodTokenData,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    ) { }
-
-    func banxaDidResumeWith(
-        _ resumeToken: String,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    ) { }
-
-    func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?) { }
 }
 ```
 
 > All delegate callbacks are delivered on the main actor.
+
+### Callback types
+
+| Type                    | Purpose                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `BanxaCheckoutResult`   | Success payload. `paymentId` / `orderId` / `status` for the native flow; `rawQuery` for the internal WebView flow.                   |
+| `APIError`              | Failure reason for `banxaDidFail(error:)` when the SDK originates the error (see [Error Handling](#error-handling)).                 |
 
 ## Models
 
@@ -168,13 +140,13 @@ extension MyViewController: BanxaPaymentSDKDelegate {
 
 | Field                | Type     | Required | Notes                                              |
 | -------------------- | -------- | -------- | -------------------------------------------------- |
-| `paymentMethodID`    | String   | Yes      | Banxa payment method id (e.g. `"apple-pay"`).      |
 | `crypto`             | String   | Yes      | Crypto asset symbol (e.g. `"ETH"`).                |
 | `fiat`               | String   | Yes      | Fiat currency code (e.g. `"EUR"`).                 |
 | `fiatAmount`         | String   | Yes      | Fiat amount as a string.                           |
 | `walletAddress`      | String   | Yes      | Destination wallet address.                        |
 | `email`              | String   | Yes      | End-user's email address.                          |
 | `redirectURL`        | String   | Yes      | URL Banxa redirects to after hosted checkout.      |
+| `paymentMethodID`    | String?  | No       | Banxa payment method id (e.g. `"debit-credit-card"`, `"apple-pay"`). |
 | `id`                 | String?  | No       | Partner-supplied order id.                         |
 | `blockchain`         | String?  | No       | Explicit blockchain network.                       |
 | `cryptoAmount`       | String?  | No       | Crypto amount when ordering by crypto value.       |
@@ -199,20 +171,20 @@ Errors are surfaced through `banxaDidFail(error:)` as `APIError`:
 | `.networkUnavailable`           | No network connectivity.                                         |
 | `.missingCredentials([String])` | `apiKey` and/or `partnerID` were blank in `BanxaConfig`.         |
 | `.sdkNotConfigured`             | `startPayment` was called before `configure(config:)`.           |
+| `.checkoutFailed(String?)`      | Internal WebView reached the failure URL. Payload is the raw query string. |
 | `.unknown(String)`              | Any other unexpected error.                                      |
 
 Each case provides a human-readable `errorDescription`.
 
 ## URL Scheme
 
-If you use redirect-based payment methods (3DS, hosted checkout return, Apple Pay flows), configure a URL scheme in your `Info.plist` and pass it to `PrimerSettings.paymentMethodOptions(urlScheme:)`. Make sure the same scheme is used as the `redirectURL` on `CreateOrderRequest` when appropriate.
+If you use redirect-based payment methods (3DS, hosted checkout return, Apple Pay flows), register a URL scheme in your `Info.plist` and use the same scheme as the `redirectURL` on `CreateOrderRequest` when appropriate.
 
 ## Example
 
 ```swift
 import SwiftUI
 import BanxaPaymentSDK
-import PrimerSDK
 
 @main
 struct DemoApp: App {
@@ -238,29 +210,29 @@ final class CheckoutCoordinator: NSObject, BanxaPaymentSDKDelegate {
         BanxaPaymentSDK.shared.delegate = self
     }
 
-    func buy() {
+    func buy(from controller: UIViewController) {
         let request = CreateOrderRequest(
-            paymentMethodID: "debit-credit-card",
             crypto: "ETH",
             fiat: "EUR",
             fiatAmount: "40",
             walletAddress: "0x...",
             email: "user@example.com",
-            redirectURL: "demo://banxa-return"
+            redirectURL: "demo://banxa-return",
+            paymentMethodID: "debit-credit-card"
         )
-        BanxaPaymentSDK.shared.startPayment(request: request)
+        BanxaPaymentSDK.shared.startPayment(request: request, controller: controller)
     }
 
-    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData) {
-        print("Payment complete:", data)
+    func banxaDidCompleteCheckout(_ result: BanxaCheckoutResult) {
+        print("Payment complete:", result.paymentId ?? result.rawQuery ?? "-")
     }
 
     func banxaDidFail(error: Error) {
         print("Payment failed:", error.localizedDescription)
     }
 
-    func banxaDidReceiveCheckout(_ response: CreateOrderResponse) {
-        // Present `response.checkoutUrl` in a web view.
+    func banxaDidDismiss() {
+        print("User dismissed checkout")
     }
 }
 ```

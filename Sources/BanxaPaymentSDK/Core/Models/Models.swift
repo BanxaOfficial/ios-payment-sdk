@@ -21,6 +21,9 @@ public enum APIError: LocalizedError {
     case networkUnavailable
     case missingCredentials([String])
     case sdkNotConfigured
+    /// Internal WebView checkout reached a failure URL. `query` is the raw
+    /// query string appended to that URL, when present.
+    case checkoutFailed(String?)
     case unknown(String)
     
     /// Human-readable description suitable for surfacing to the partner.
@@ -52,6 +55,11 @@ public enum APIError: LocalizedError {
             return "Missing required credentials: \(fields.joined(separator: ", "))"
         case .sdkNotConfigured:
             return "BanxaPaymentSDK is not configured. Call configure(config:) first."
+        case .checkoutFailed(let query):
+            if let query, !query.isEmpty {
+                return "Checkout failed: \(query)"
+            }
+            return "Checkout failed."
         case .unknown(let message):
             return "Unknown error: \(message)"
         }
