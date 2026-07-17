@@ -68,127 +68,61 @@ public struct BanxaConfig {
     }
 }
 
+// MARK: - Callback Types
+
+/// Result of a successful checkout. Wraps the upstream provider payload
+/// so partners never depend on the underlying payment provider SDK.
+///
+/// Native-flow completions populate `paymentId`, `orderId`, `status`.
+/// Internal-WebView completions populate `rawQuery` with the query string
+/// appended to the terminal success URL.
+public struct BanxaCheckoutResult: Sendable {
+    public let paymentId: String?
+    public let orderId: String?
+    public let status: String?
+    public let rawQuery: String?
+
+    public init(
+        paymentId: String? = nil,
+        orderId: String? = nil,
+        status: String? = nil,
+        rawQuery: String? = nil
+    ) {
+        self.paymentId = paymentId
+        self.orderId = orderId
+        self.status = status
+        self.rawQuery = rawQuery
+    }
+}
+
 // MARK: - Delegate
 
-/// Callbacks the SDK sends back to the partner for both Banxa flow events
-/// and forwarded Primer drop-in checkout events.
+/// Callbacks the SDK sends back to the partner. All types are Banxa-owned —
+/// partners never touch the underlying payment provider SDK.
 @MainActor
 public protocol BanxaPaymentSDKDelegate: AnyObject {
-    // Banxa flow
-    
-    /// Called when the SDK has a checkout URL to hand back to the partner
-    /// (paymentReady is false, or paymentReady is true but no nativeToken was returned).
-    /// - Parameter response: The full create-order response from Banxa.
-    func banxaDidReceiveCheckout(_ response: CreateOrderResponse)
-    
-    /// Called when the SDK has a checkout URL and need to execute the internal WebView.
-    /// - Parameter status: the status and if any other query.
-    func banxaDidWebViewCheckout(_ status: Bool, _ query: String?)
-    
-    /// Called for every URL navigation inside the internal checkout WebView,
-    /// including intermediate steps (payment method picker, 3DS, status pages…).
-    /// Use this to observe the full URL trail; the SDK still emits
-    /// `banxaDidWebViewCheckout(_:_:)` separately for the final success/failure.
-    /// - Parameter url: The URL the WebView is about to navigate to.
-    func banxaWebViewDidNavigate(to url: URL)
-    
-    /// Called when the Banxa flow itself fails (validation, network, decoding, or API error).
+
+    /// Called when checkout completes successfully — from either the native
+    /// in-app flow or the internal WebView flow.
+    /// - Parameter result: Banxa-owned wrapper around the completed payment.
+    func banxaDidCompleteCheckout(_ result: BanxaCheckoutResult)
+
+    /// Called for any failure in the flow:
+    /// - Banxa API errors (validation, network, decoding, `/eligibility` / `/buy` failures)
+    /// - In-app checkout errors (card decline, 3DS failure, etc)
+    /// - Internal WebView failure URL
     /// - Parameter error: The error describing the failure. Usually an `APIError`.
     func banxaDidFail(error: Error)
-    
-    /// Called when the user dismisses the Primer drop-in UI without completing checkout.
+
+    /// Called when the user closes the checkout UI without completing.
     func banxaDidDismiss()
-    
-    // Forwarded Primer callbacks
-    
-    /// Called when Primer drop-in checkout completes successfully.
-    /// - Parameter data: The Primer checkout result payload.
-    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData)
-    
-    /// Called when Primer is about to refresh its client session.
-    func banxaClientSessionWillUpdate()
-    
-    /// Called after Primer's client session has been refreshed.
-    /// - Parameter clientSession: The updated client session.
-    func banxaClientSessionDidUpdate(_ clientSession: PrimerClientSession)
-    
-    /// Called before Primer creates a payment. Use the decision handler to
-    /// continue, abort with a custom error, or supply additional data.
-    /// - Parameters:
-    ///   - data: Payment method data Primer is about to submit.
-    ///   - decisionHandler: Invoke exactly once to tell Primer how to proceed.
-    func banxaWillCreatePayment(
-        _ data: PrimerCheckoutPaymentMethodData,
-        decisionHandler: @escaping (PrimerPaymentCreationDecision) -> Void
-    )
-    
-    /// Called when Primer fails. Use the decision handler to provide a custom
-    /// error message shown to the user.
-    /// - Parameters:
-    ///   - error: The error raised by Primer.
-    ///   - data: Optional checkout data captured before the failure.
-    ///   - decisionHandler: Invoke exactly once with a `PrimerErrorDecision`.
-    func banxaDidFailWithError(
-        _ error: Error,
-        data: PrimerCheckoutData?,
-        decisionHandler: @escaping (PrimerErrorDecision) -> Void
-    )
-    
-    /// Called when Primer has tokenized a payment method.
-    /// - Parameters:
-    ///   - tokenData: Token information returned by Primer.
-    ///   - decisionHandler: Invoke exactly once to resume or fail the flow.
-    func banxaDidTokenizePaymentMethod(
-        _ tokenData: PrimerPaymentMethodTokenData,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    )
-    
-    /// Called when Primer needs to resume the payment with a server token (e.g. 3DS).
-    /// - Parameters:
-    ///   - resumeToken: Resume token issued by Primer's backend.
-    ///   - decisionHandler: Invoke exactly once to resume or fail the flow.
-    func banxaDidResumeWith(
-        _ resumeToken: String,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    )
-    
-    /// Called when the payment enters a pending state and Primer has supplemental info.
-    /// - Parameter additionalInfo: Optional extra payload describing the pending state.
-    func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?)
 }
 
 /// Default no-op implementations make every method effectively optional.
 public extension BanxaPaymentSDKDelegate {
-    func banxaDidReceiveCheckout(_ response: CreateOrderResponse) {}
-    func banxaDidWebViewCheckout(_ status: Bool, _ query: String?) {}
-    func banxaWebViewDidNavigate(to url: URL) {}
+    func banxaDidCompleteCheckout(_ result: BanxaCheckoutResult) {}
     func banxaDidFail(error: Error) {}
     func banxaDidDismiss() {}
-    func banxaDidCompleteCheckout(_ data: PrimerCheckoutData) {}
-    func banxaClientSessionWillUpdate() {}
-    func banxaClientSessionDidUpdate(_ clientSession: PrimerClientSession) {}
-    func banxaWillCreatePayment(
-        _ data: PrimerCheckoutPaymentMethodData,
-        decisionHandler: @escaping (PrimerPaymentCreationDecision) -> Void
-    ) {
-        decisionHandler(.continuePaymentCreation())
-    }
-    func banxaDidFailWithError(
-        _ error: Error,
-        data: PrimerCheckoutData?,
-        decisionHandler: @escaping (PrimerErrorDecision) -> Void
-    ) {
-        decisionHandler(.fail(withErrorMessage: nil))
-    }
-    func banxaDidTokenizePaymentMethod(
-        _ tokenData: PrimerPaymentMethodTokenData,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    ) {}
-    func banxaDidResumeWith(
-        _ resumeToken: String,
-        decisionHandler: @escaping (PrimerResumeDecision) -> Void
-    ) {}
-    func banxaDidEnterResumePending(_ additionalInfo: PrimerCheckoutAdditionalInfo?) {}
 }
 
 // MARK: - SDK
@@ -269,16 +203,16 @@ public final class BanxaPaymentSDK {
             } else if let url = order.checkoutUrl, !url.isEmpty {
                 let vc = CheckoutWebViewController(
                     checkoutUrl: url, returnUrl: request.redirectURL,
-                    onClose: {
-                        self.delegate?.banxaDidDismiss()
-                    }, onNavigationStateChange: { [weak self] url in
-                        self?.delegate?.banxaWebViewDidNavigate(to: url)
+                    onClose: { [weak self] in
+                        self?.delegate?.banxaDidDismiss()
                     },
-                    onSuccess: { status in
-                        self.delegate?.banxaDidWebViewCheckout(true, status)
+                    onSuccess: { [weak self] query in
+                        self?.delegate?.banxaDidCompleteCheckout(
+                            BanxaCheckoutResult(rawQuery: query)
+                        )
                     },
-                    onFailure: { status in
-                        self.delegate?.banxaDidWebViewCheckout(false, status)
+                    onFailure: { [weak self] query in
+                        self?.delegate?.banxaDidFail(error: APIError.checkoutFailed(query))
                     },
                     returnUrlOnSuccess: "/status/",
                     returnUrlOnFailure: "/error/",
