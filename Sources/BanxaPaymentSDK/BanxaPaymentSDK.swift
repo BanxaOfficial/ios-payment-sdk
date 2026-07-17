@@ -208,7 +208,7 @@ public final class BanxaPaymentSDK {
                     },
                     onSuccess: { [weak self] query in
                         self?.delegate?.banxaDidCompleteCheckout(
-                            BanxaCheckoutResult(rawQuery: query)
+                            BanxaCheckoutResult(status: "success", rawQuery: query)
                         )
                     },
                     onFailure: { [weak self] query in
