@@ -6,6 +6,7 @@ A headless iOS SDK that lets partners initiate Banxa fiat-to-crypto orders and c
 
 - Headless API: configure once, start a payment with a single call.
 - Automatic eligibility + create-order pipeline against the Banxa API.
+- Configuration helpers for supported countries, fiats, crypto, payment methods, and live quotes (`fetchCountries`, `fetchFiats`, `fetchCrypto`, `fetchPaymentMethods`, `fetchQuotes`).
 - Built-in Primer drop-in presentation when a native token is available.
 - Hosted-checkout fallback URL handed back to the partner when in-app payment is not possible.
 - Strongly-typed request/response models and `APIError` cases.
@@ -75,6 +76,96 @@ BanxaPaymentSDK.shared.delegate = self
 | `.production` | `https://api.banxa.com`               |
 
 The effective API base URL is `<host>/<partnerID>/v2`.
+
+## Configuration Endpoints
+
+After `configure(config:)`, you can fetch Banxa-supported configuration data. These calls are `async throws` and require a configured SDK with non-blank credentials.
+
+### Countries
+
+`GET /{partnerID}/v2/countries` — supported countries (identical for buy and sell).
+
+```swift
+let countries = try await BanxaPaymentSDK.shared.fetchCountries()
+// countries: [Country]
+// Country.id / .description, optional Country.states: [CountryState]
+```
+
+| Type           | Fields                                      |
+| -------------- | ------------------------------------------- |
+| `Country`      | `id`, `description`, `states: [CountryState]?` |
+| `CountryState` | `id`, `description`                         |
+
+### Fiats
+
+`GET /{partnerID}/v2/fiats/{orderType}` — supported fiat currencies for buy or sell.
+
+```swift
+let fiats = try await BanxaPaymentSDK.shared.fetchFiats(orderType: .buy)
+// fiats: [Fiat]
+// Fiat.id / .description / .symbol, optional .supportedPaymentMethods: [FiatPaymentMethod]
+```
+
+| Type                | Fields                                              |
+| ------------------- | --------------------------------------------------- |
+| `OrderType`         | `.buy`, `.sell`                                     |
+| `Fiat`              | `id`, `description?`, `symbol?`, `supportedPaymentMethods: [FiatPaymentMethod]?` |
+| `FiatPaymentMethod` | `id`, `name?`, `minimum?`, `maximum?`               |
+
+### Crypto
+
+`GET /{partnerID}/v2/crypto/{orderType}` — supported cryptocurrencies for buy or sell.
+
+```swift
+let assets = try await BanxaPaymentSDK.shared.fetchCrypto(orderType: .buy)
+// assets: [Cryptocurrency]
+// Cryptocurrency.id / .description, optional .blockchains: [CryptoBlockchain]
+```
+
+| Type              | Fields                                                                 |
+| ----------------- | ---------------------------------------------------------------------- |
+| `Cryptocurrency`  | `id`, `description?`, `blockchains: [CryptoBlockchain]?`               |
+| `CryptoBlockchain`| `id`, `description?`, `isDefaultBlockchain?`, `address?`, `network?`, `minimum?`, `unsupportedCountries: [String: [String]]?` |
+
+### Payment Methods
+
+`GET /{partnerID}/v2/payment-methods/{orderType}` — supported payment methods for buy or sell. Optionally filter with `?fiat=`.
+
+```swift
+let methods = try await BanxaPaymentSDK.shared.fetchPaymentMethods(orderType: .buy)
+let usdOnly = try await BanxaPaymentSDK.shared.fetchPaymentMethods(orderType: .buy, fiat: "USD")
+// methods: [PaymentMethod]
+// PaymentMethod.id / .name / .description, optional .supportedFiats: [String]
+```
+
+| Type            | Fields                                              |
+| --------------- | --------------------------------------------------- |
+| `PaymentMethod` | `id`, `name?`, `description?`, `supportedFiats: [String]?` |
+
+### Quotes
+
+`GET /{partnerID}/v2/quotes/{orderType}` — live pricing for a fiat/crypto/payment-method combination. Do not cache; call immediately before showing a price. Banxa may return a single object or an array (with discount codes); `fetchQuotes` always returns `[Quote]`.
+
+```swift
+let request = QuoteRequest(
+    paymentMethodID: "debit-credit-card",
+    crypto: "ETH",
+    blockchain: "ETH",
+    fiat: "USD",
+    fiatAmount: "200"
+)
+let quotes = try await BanxaPaymentSDK.shared.fetchQuotes(orderType: .buy, request: request)
+// quotes[0].cryptoAmount / .fiatAmount / .processingFee / .networkFee
+```
+
+| Type                   | Fields                                                                 |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `QuoteRequest`         | `paymentMethodID`, `crypto`, `blockchain`, `fiat`, `fiatAmount?`, `cryptoAmount?`, `externalCustomerID?`, `ipAddress?`, `discountCode?` |
+| `Quote`                | `paymentMethodID?`, `cryptoAmount?`, `fiatAmount?`, `processingFee?`, `networkFee?`, `discount: QuoteDiscount?` |
+| `QuoteDiscount`        | `originalQuote: QuoteOriginalAmounts?`, `discountCode?`                |
+| `QuoteOriginalAmounts` | `originalCryptoAmount?`, `originalNetworkFee?`, `originalProcessingFee?`, `originalFiatAmount?` |
+
+> Provide either `fiatAmount` or `cryptoAmount` (or both — Banxa prefers crypto when both are set).
 
 ## Starting a Payment
 
