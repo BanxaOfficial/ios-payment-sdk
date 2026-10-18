@@ -224,3 +224,22 @@ public struct QuotesEndpoint: Endpoint {
         self.headers = banxaHeaders(apiKey: config.apiKey)
     }
 }
+
+/// `POST /kyc/sessions` — creates a hosted KYC session link for a customer.
+public struct CreateKycSessionEndpoint: Endpoint {
+    public let baseURL: String
+    public let headers: [String: String]
+    public var path: String { "/kyc/sessions" }
+    public var method: String { "POST" }
+    public var body: Data?
+    
+    /// Creates the endpoint.
+    /// - Parameters:
+    ///   - request: The KYC session payload to send.
+    ///   - config: Partner config used to derive `baseURL` and `x-api-key` header.
+    init(request: CreateKycSessionRequest, config: BanxaConfig) {
+        self.baseURL = config.baseURL
+        self.headers = banxaHeaders(apiKey: config.apiKey)
+        self.body = encodeBody(request)
+    }
+}
