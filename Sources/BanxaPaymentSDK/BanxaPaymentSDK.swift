@@ -116,6 +116,17 @@ public protocol BanxaPaymentSDKDelegate: AnyObject {
 
     /// Called when the user closes the checkout UI without completing.
     func banxaDidDismiss()
+
+    /// Called once when the hosted KYC flow ends. The verification result reaches your backend by webhook.
+    /// - Parameter result: How and with what status the flow ended.
+    func banxaDidCompleteKyc(_ result: BanxaKycResult)
+
+    /// Called when the KYC session can't be presented, or the hosted flow reports an error.
+    /// - Parameter error: The reason.
+    func banxaKycDidFail(error: BanxaKycError)
+
+    /// Called when the customer closes the KYC sheet before the flow ends.
+    func banxaDidDismissKyc()
 }
 
 /// Default no-op implementations make every method effectively optional.
@@ -123,6 +134,9 @@ public extension BanxaPaymentSDKDelegate {
     func banxaDidCompleteCheckout(_ result: BanxaCheckoutResult) {}
     func banxaDidFail(error: Error) {}
     func banxaDidDismiss() {}
+    func banxaDidCompleteKyc(_ result: BanxaKycResult) {}
+    func banxaKycDidFail(error: BanxaKycError) {}
+    func banxaDidDismissKyc() {}
 }
 
 // MARK: - SDK
@@ -215,7 +229,59 @@ public final class BanxaPaymentSDK {
         )
         return response.quotes
     }
-    
+
+    /// Creates a hosted KYC session link (`POST /kyc/sessions`).
+    ///
+    /// Repeat calls for the same `externalCustomerID` within an hour return the same link.
+    /// Prefer creating the session on your backend and building a `KycSession` from its response.
+    /// - Parameter request: The customer to verify and the optional tier, country and return URL.
+    /// - Returns: The session's link and expiry time.
+    /// - Throws: `APIError.sdkNotConfigured`, `APIError.missingCredentials`, or a
+    ///   networking / decoding `APIError` from the Banxa API. `serverError(403)` means
+    ///   hosted KYC isn't enabled for this partner; `serverError(502)` is safe to retry.
+    public func createKycSession(request: CreateKycSessionRequest) async throws -> KycSession {
+        let config = try resolvedConfig()
+        return try await apiClient.request(CreateKycSessionEndpoint(request: request, config: config))
+    }
+
+    /// Presents the hosted KYC flow as a page sheet.
+    ///
+    /// Doesn't need `configure(config:)`, so it works with a session your backend created.
+    /// Reports through `banxaDidCompleteKyc(_:)`, `banxaKycDidFail(error:)` and `banxaDidDismissKyc()`.
+    /// - Parameters:
+    ///   - session: The session to present.
+    ///   - controller: The view controller to present from.
+    ///   - returnURL: The `returnUrl` the session was created with. Reaching it ends the flow.
+    ///   - allowedOrigins: Extra origins trusted on top of the session URL's own.
+    public func startKyc(
+        session: KycSession,
+        controller: UIViewController,
+        returnURL: String? = nil,
+        allowedOrigins: [String] = []
+    ) {
+        let vc = HostedKycWebViewController(
+            session: session,
+            returnURL: returnURL,
+            allowedOrigins: allowedOrigins,
+            onComplete: { [weak self] result in
+                self?.delegate?.banxaDidCompleteKyc(result)
+            },
+            onError: { [weak self] error in
+                self?.delegate?.banxaKycDidFail(error: error)
+            },
+            onClose: { [weak self] in
+                self?.delegate?.banxaDidDismissKyc()
+            }
+        )
+
+        if let error = vc.preflightError() {
+            delegate?.banxaKycDidFail(error: error)
+            return
+        }
+
+        controller.present(vc.wrappedInNavigationController(), animated: true)
+    }
+
     /// Returns the configured `BanxaConfig`, or throws if the SDK has not been
     /// configured / is missing credentials.
     private func resolvedConfig() throws -> BanxaConfig {

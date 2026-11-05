@@ -9,6 +9,7 @@ A headless iOS SDK that lets partners initiate Banxa fiat-to-crypto orders and c
 - Configuration helpers for supported countries, fiats, crypto, payment methods, and live quotes (`fetchCountries`, `fetchFiats`, `fetchCrypto`, `fetchPaymentMethods`, `fetchQuotes`).
 - Built-in Primer drop-in presentation when a native token is available.
 - Hosted-checkout fallback URL handed back to the partner when in-app payment is not possible.
+- Hosted KYC: verify a customer through Banxa's hosted flow before any order (`createKycSession`, `startKyc`).
 - Strongly-typed request/response models and `APIError` cases.
 - Swift 6 / Swift concurrency, `@MainActor`-isolated public surface.
 
@@ -189,7 +190,7 @@ BanxaPaymentSDK.shared.startPayment(request: request, controller: self)
 
 Conform to `BanxaPaymentSDKDelegate` to receive Banxa flow events and in-app checkout results. All callback types are Banxa-owned — partners never import or reference the underlying payment provider SDK. Every method has a default no-op implementation, so implement only what you need.
 
-The delegate has just three methods — one for success, one for failure, one for dismissal. Each has a default no-op implementation, so implement only what you need.
+For checkout, the delegate has three methods — one for success, one for failure, one for dismissal. Hosted KYC has its own three (see [Hosted KYC](#hosted-kyc)), so a KYC event never reaches your checkout handlers. Each has a default no-op implementation, so implement only what you need.
 
 ```swift
 import BanxaPaymentSDK
@@ -224,6 +225,125 @@ extension MyViewController: BanxaPaymentSDKDelegate {
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `BanxaCheckoutResult`   | Success payload. `paymentId` / `orderId` / `status` for the native flow; `rawQuery` for the internal WebView flow.                   |
 | `APIError`              | Failure reason for `banxaDidFail(error:)` when the SDK originates the error (see [Error Handling](#error-handling)).                 |
+
+## Hosted KYC
+
+If you don't run your own KYC, send the customer through Banxa's hosted verification **before** they place an order. It takes two steps: create a session, then present it.
+
+### 1. Create a session
+
+We recommend creating the session on **your backend** (`POST /{partner}/v2/kyc/sessions`), so your API key isn't shipped in the app. Send the two returned fields to the app and build the session there:
+
+```swift
+let session = KycSession(redirectURL: response.redirectUrl, expiresAt: response.expiresAt)
+```
+
+You can also create it from the app:
+
+```swift
+let session = try await BanxaPaymentSDK.shared.createKycSession(
+    request: CreateKycSessionRequest(
+        externalCustomerID: "customer-123",
+        tier: .standard,                 // optional: .standard (default), .express, .enhanced
+        country: "AU",                   // optional, two-letter code
+        returnURL: "myapp://kyc-done"    // optional, an https URL or a deep link
+    )
+)
+```
+
+| Field                | Type      | Required | Notes                                                                                   |
+| -------------------- | --------- | -------- | --------------------------------------------------------------------------------------- |
+| `externalCustomerID` | String    | Yes      | Your customer id, up to 255 characters. Sent unchanged.                                 |
+| `tier`               | KycTier?  | No       | Banxa defaults to `.standard`. `.express` is accepted, but Banxa may apply a stricter level. |
+| `country`            | String?   | No       | Two-letter country code.                                                                |
+| `returnURL`          | String?   | No       | Where the flow returns when it ends. An https URL or a deep link such as `myapp://kyc-done`. |
+
+- Calling it again for the same `externalCustomerID` within **one hour** returns the same link, so retrying is safe.
+- The link stops working at `expiresAt`. Create a new session after that.
+- `APIError.serverError(403)`: hosted KYC isn't enabled for your partner account. Contact Banxa.
+- `APIError.serverError(502)`: a temporary upstream error. Retry.
+
+### 2. Present the flow
+
+```swift
+BanxaPaymentSDK.shared.startKyc(
+    session: session,
+    controller: self,
+    returnURL: "myapp://kyc-done"   // the same returnURL the session was created with
+)
+```
+
+`startKyc` doesn't need `configure(config:)`, so it works with a session your backend created. It presents the flow as a page sheet and reports through three delegate methods:
+
+```swift
+extension MyViewController: BanxaPaymentSDKDelegate {
+
+    func banxaDidCompleteKyc(_ result: BanxaKycResult) {
+        // The customer finished the flow. Fires once.
+        // This is NOT the verification decision — that reaches your backend by webhook.
+    }
+
+    func banxaKycDidFail(error: BanxaKycError) {
+        // The session couldn't be presented, or the flow reported an error.
+    }
+
+    func banxaDidDismissKyc() {
+        // The customer closed the sheet before finishing.
+    }
+}
+```
+
+The SDK detects the end of the flow in two ways and reports whichever comes first:
+
+- The flow posts a `banxa:kyc-complete` message (`result.channel == .message`).
+- The flow navigates to your `returnURL` (`result.channel == .returnURL`). The SDK stops that navigation and closes the sheet, so a deep link never shows an error page and an https URL never opens inside the sheet.
+
+Only messages from the page itself are accepted, and only from the session URL's origin. If the flow sends the customer across another Banxa host, pass it in `allowedOrigins`.
+
+There is no status endpoint to poll. Use the **KYC webhook** on your backend for the verification result.
+
+### Camera and microphone
+
+The flow captures ID documents and a liveness video. Add both keys to your app's `Info.plist`, or `startKyc` fails with `.missingUsageDescription`:
+
+```xml
+<key>NSCameraUsageDescription</key>
+<string>We use the camera to verify your identity.</string>
+<key>NSMicrophoneUsageDescription</key>
+<string>We use the microphone for the identity liveness check.</string>
+```
+
+Camera access inside a web view needs **iOS 14.3 or later**. On older versions `startKyc` fails with `.unsupportedOSVersion` instead of opening a flow that can't capture documents.
+
+### `BanxaKycError`
+
+| Case                                | Meaning                                                                 |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| `.sessionExpired`                   | The session passed `expiresAt`. Create a new one.                       |
+| `.invalidSessionURL`                | The session's `redirectURL` isn't a valid https URL.                    |
+| `.unsupportedOSVersion`             | The device runs iOS older than 14.3.                                    |
+| `.missingUsageDescription([String])`| These camera / microphone keys are missing from your `Info.plist`.     |
+| `.flowError(code:message:)`         | The hosted flow reported an error.                                      |
+
+### Embedding the view controller directly
+
+To present it yourself, or to see the `ready`, `loading` and rejected-message events, use `HostedKycWebViewController`:
+
+```swift
+let vc = HostedKycWebViewController(
+    session: session,
+    returnURL: "myapp://kyc-done",
+    onComplete: { result in /* ... */ },
+    onError: { error in /* ... */ },
+    onMessageRejected: { rejected in print("Refused", rejected.type, "from", rejected.origin) },
+    onClose: { /* ... */ }
+)
+if let error = vc.preflightError() {
+    // Handle it instead of presenting.
+} else {
+    present(vc.wrappedInNavigationController(), animated: true)
+}
+```
 
 ## Models
 
